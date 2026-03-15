@@ -1,5 +1,4 @@
 using Godot;
-using System;
 
 namespace Tessellate;
 
@@ -9,10 +8,12 @@ namespace Tessellate;
 /// </summary>
 public partial class GlassPiece : Area2D
 {
-    [Export] public Color GlassColor { get; set; } = new Color(0.2f, 0.4f, 0.8f, 0.85f);
     [Export] public float CameWidth { get; set; } = 3.0f;
-    [Export] public float SnapDistance { get; set; } = 40.0f;
-    [Export] public float SnapAngle { get; set; } = 0.5f; // ~30 degrees in radians
+
+    private static readonly Color CameColor = new(0.15f, 0.15f, 0.15f);
+
+    [Signal] public delegate void PieceDroppedEventHandler();
+    [Signal] public delegate void DragStartedEventHandler();
 
     private Polygon2D _glass;
     private Line2D _came;
@@ -23,6 +24,7 @@ public partial class GlassPiece : Area2D
     private bool _isPlaced;
 
     public bool IsPlaced => _isPlaced;
+    public bool IsDragging => _isDragging;
 
     public override void _Ready()
     {
@@ -30,9 +32,9 @@ public partial class GlassPiece : Area2D
         _came = GetNode<Line2D>("Came");
         _collision = GetNode<CollisionPolygon2D>("Collision");
 
-        _glass.Color = GlassColor;
-
         InputEvent += OnInputEvent;
+        SetProcessInput(false);
+        SetProcessUnhandledKeyInput(false);
     }
 
     public void SetShape(Vector2[] vertices)
@@ -40,14 +42,20 @@ public partial class GlassPiece : Area2D
         _glass.Polygon = vertices;
         _collision.Polygon = vertices;
 
+        // Lead came outline — closed loop
         var camePoints = new Vector2[vertices.Length + 1];
-        for (int i = 0; i < vertices.Length; i++)
-            camePoints[i] = vertices[i];
+        vertices.CopyTo(camePoints, 0);
         camePoints[vertices.Length] = vertices[0];
 
         _came.Points = camePoints;
         _came.Width = CameWidth;
-        _came.DefaultColor = new Color(0.15f, 0.15f, 0.15f);
+        _came.DefaultColor = CameColor;
+    }
+
+    public void SetColor(Color color)
+    {
+        if (_glass != null)
+            _glass.Color = color;
     }
 
     public Vector2[] GetGlobalVertices()
@@ -59,197 +67,96 @@ public partial class GlassPiece : Area2D
         return globalVerts;
     }
 
-    public void SetColor(Color color)
+    public void AnimateSnap(SnapResult snap, float duration = 0.12f)
     {
-        GlassColor = color;
-        if (_glass != null)
-            _glass.Color = color;
+        var tween = CreateTween().SetParallel(true);
+        tween.TweenProperty(this, "rotation", Rotation + snap.Rotation, duration)
+            .SetTrans(Tween.TransitionType.Quad)
+            .SetEase(Tween.EaseType.Out);
+        tween.TweenProperty(this, "global_position", GlobalPosition + snap.Translation, duration)
+            .SetTrans(Tween.TransitionType.Quad)
+            .SetEase(Tween.EaseType.Out);
     }
+
+    /// <summary>
+    /// Force-cancel a drag in progress (used when another piece starts dragging).
+    /// </summary>
+    public void CancelDrag()
+    {
+        if (!_isDragging) return;
+        _isDragging = false;
+        SetProcessInput(false);
+        SetProcessUnhandledKeyInput(false);
+    }
+
+    // --- Input handling ---
 
     private void OnInputEvent(Node viewport, InputEvent @event, long shapeIdx)
     {
-        if (@event is InputEventMouseButton mb)
+        switch (@event)
         {
-            if (mb.ButtonIndex == MouseButton.Left && mb.Pressed)
-            {
-                _isDragging = true;
-                _dragOffset = GlobalPosition - mb.GlobalPosition;
-                _isPlaced = false;
-            }
-        }
-
-        if (@event is InputEventScreenTouch touch)
-        {
-            if (touch.Pressed)
-            {
-                _isDragging = true;
-                _dragOffset = GlobalPosition - touch.Position;
-                _isPlaced = false;
-            }
-            else
-            {
+            case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true } mb:
+                StartDrag(mb.GlobalPosition);
+                break;
+            case InputEventScreenTouch { Pressed: true } touch:
+                StartDrag(touch.Position);
+                break;
+            case InputEventScreenTouch { Pressed: false }:
                 Drop();
-            }
+                break;
         }
     }
 
     public override void _Input(InputEvent @event)
     {
-        if (!_isDragging) return;
+        switch (@event)
+        {
+            case InputEventMouseMotion motion:
+                GlobalPosition = motion.GlobalPosition + _dragOffset;
+                break;
+            case InputEventScreenDrag drag:
+                GlobalPosition = drag.Position + _dragOffset;
+                break;
+            case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: false }:
+                Drop();
+                break;
+            case InputEventMouseButton { ButtonIndex: MouseButton.Right, Pressed: true }:
+                RotationDegrees += 45;
+                break;
+        }
+    }
 
-        if (@event is InputEventMouseMotion motion)
-        {
-            GlobalPosition = motion.GlobalPosition + _dragOffset;
-        }
-        else if (@event is InputEventScreenDrag drag)
-        {
-            GlobalPosition = drag.Position + _dragOffset;
-        }
-        else if (@event is InputEventMouseButton mb && mb.ButtonIndex == MouseButton.Left && !mb.Pressed)
-        {
-            Drop();
-        }
+    public override void _UnhandledKeyInput(InputEvent @event)
+    {
+        if (@event is not InputEventKey { Pressed: true } key) return;
 
-        if (@event is InputEventMouseButton rmb && rmb.ButtonIndex == MouseButton.Right && rmb.Pressed)
+        switch (key.Keycode)
         {
-            RotationDegrees += 45;
+            case Key.R:
+                RotationDegrees += 45;
+                break;
+            case Key.F:
+                Scale = new Vector2(Scale.X * -1, Scale.Y);
+                break;
         }
+    }
+
+    private void StartDrag(Vector2 pointerPosition)
+    {
+        _isDragging = true;
+        _isPlaced = false;
+        _dragOffset = GlobalPosition - pointerPosition;
+        SetProcessInput(true);
+        SetProcessUnhandledKeyInput(true);
+        EmitSignal(SignalName.DragStarted);
     }
 
     private void Drop()
     {
         _isDragging = false;
         _isPlaced = true;
-        TrySnap();
-    }
-
-    private void TrySnap()
-    {
-        float bestScore = float.MaxValue;
-        float bestRotation = 0f;
-        Vector2 bestTranslation = Vector2.Zero;
-        bool found = false;
-
-        var myVerts = GetGlobalVertices();
-
-        foreach (var child in GetParent().GetChildren())
-        {
-            if (child is not GlassPiece other || other == this || !other.IsPlaced)
-                continue;
-
-            var otherVerts = other.GetGlobalVertices();
-
-            // Check every edge pair between the two pieces
-            for (int i = 0; i < myVerts.Length; i++)
-            {
-                var myA = myVerts[i];
-                var myB = myVerts[(i + 1) % myVerts.Length];
-                var myMid = (myA + myB) * 0.5f;
-                float myAngle = (myB - myA).Angle();
-
-                for (int j = 0; j < otherVerts.Length; j++)
-                {
-                    var otherA = otherVerts[j];
-                    var otherB = otherVerts[(j + 1) % otherVerts.Length];
-                    var otherMid = (otherA + otherB) * 0.5f;
-                    float otherAngle = (otherB - otherA).Angle();
-
-                    // Quick distance check — skip if edges are far apart
-                    float midDist = myMid.DistanceTo(otherMid);
-                    if (midDist > SnapDistance * 3) continue;
-
-                    // Rotation to make edges anti-parallel (flush facing each other)
-                    float rotDelta = NormalizeAngle(otherAngle + Mathf.Pi - myAngle);
-
-                    // Only snap if edges are already roughly aligned
-                    if (Mathf.Abs(rotDelta) > SnapAngle) continue;
-
-                    // Simulate where my edge endpoints land after rotation
-                    var rotMyA = RotatePoint(myA, GlobalPosition, rotDelta);
-                    var rotMyB = RotatePoint(myB, GlobalPosition, rotDelta);
-
-                    // Find the best vertex-to-vertex alignment for positioning
-                    // Try all four pairings of the two edge endpoints
-                    Vector2[] rotPts = { rotMyA, rotMyB };
-                    Vector2[] otherPts = { otherA, otherB };
-
-                    foreach (var rp in rotPts)
-                    {
-                        foreach (var op in otherPts)
-                        {
-                            float dist = rp.DistanceTo(op);
-                            if (dist < SnapDistance && dist < bestScore)
-                            {
-                                bestScore = dist;
-                                bestRotation = rotDelta;
-                                bestTranslation = op - rp;
-                                found = true;
-                            }
-                        }
-
-                        // Also try snapping to closest point along the other edge
-                        var cp = ClosestPointOnSegment(rp, otherA, otherB);
-                        float cpDist = rp.DistanceTo(cp);
-                        if (cpDist < SnapDistance && cpDist < bestScore)
-                        {
-                            bestScore = cpDist;
-                            bestRotation = rotDelta;
-                            bestTranslation = cp - rp;
-                            found = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        if (found)
-        {
-            var tween = CreateTween();
-            tween.SetParallel(true);
-            tween.TweenProperty(this, "rotation",
-                Rotation + bestRotation, 0.12f)
-                .SetTrans(Tween.TransitionType.Quad)
-                .SetEase(Tween.EaseType.Out);
-            tween.TweenProperty(this, "global_position",
-                GlobalPosition + bestTranslation, 0.12f)
-                .SetTrans(Tween.TransitionType.Quad)
-                .SetEase(Tween.EaseType.Out);
-        }
-    }
-
-    private static float NormalizeAngle(float angle)
-    {
-        while (angle > Mathf.Pi) angle -= Mathf.Tau;
-        while (angle < -Mathf.Pi) angle += Mathf.Tau;
-        return angle;
-    }
-
-    private static Vector2 RotatePoint(Vector2 point, Vector2 pivot, float angle)
-    {
-        return pivot + (point - pivot).Rotated(angle);
-    }
-
-    private static Vector2 ClosestPointOnSegment(Vector2 point, Vector2 a, Vector2 b)
-    {
-        var ab = b - a;
-        float lengthSq = ab.LengthSquared();
-        if (lengthSq < 0.0001f) return a;
-        float t = Mathf.Clamp((point - a).Dot(ab) / lengthSq, 0f, 1f);
-        return a + ab * t;
-    }
-
-    public override void _UnhandledKeyInput(InputEvent @event)
-    {
-        if (@event is InputEventKey key && key.Pressed)
-        {
-            if (key.Keycode == Key.R && _isDragging)
-            {
-                RotationDegrees += 45;
-            }
-            else if (key.Keycode == Key.F && _isDragging)
-            {
-                Scale = new Vector2(Scale.X * -1, Scale.Y);
-            }
-        }
+        SetProcessInput(false);
+        SetProcessUnhandledKeyInput(false);
+        EmitSignal(SignalName.PieceDropped);
     }
 }

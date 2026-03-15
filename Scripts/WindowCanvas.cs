@@ -1,42 +1,34 @@
 using Godot;
-using System.Collections.Generic;
 
 namespace Tessellate;
 
 /// <summary>
-/// The stained glass window frame — the canvas where pieces are placed.
-/// Draws a dark background with an arched window silhouette.
+/// The stained glass window frame — draws a dark arched window silhouette.
 /// </summary>
 public partial class WindowCanvas : Node2D
 {
-    private readonly List<GlassPiece> _placedPieces = new();
+    [Export] public float WindowWidth { get; set; } = 600f;
+    [Export] public float WindowHeight { get; set; } = 900f;
+
+    private static readonly Color FrameColor = new(0.1f, 0.1f, 0.12f);
+    private static readonly Color BorderColor = new(0.2f, 0.2f, 0.22f);
+    private const float BorderWidth = 6f;
 
     public override void _Draw()
     {
-        // Draw a simple arched window frame
-        var frameColor = new Color(0.1f, 0.1f, 0.12f);
-        var windowWidth = 600f;
-        var windowHeight = 900f;
-        var x = -windowWidth / 2;
-        var y = -windowHeight / 2;
+        float x = -WindowWidth / 2;
+        float y = -WindowHeight / 2;
 
         // Dark background rectangle
-        DrawRect(new Rect2(x, y, windowWidth, windowHeight), frameColor);
+        DrawRect(new Rect2(x, y, WindowWidth, WindowHeight), FrameColor);
 
-        // Arched top — draw a semicircle at the top of the rectangle
+        // Arched top — semicircle at top of rectangle
         var archCenter = new Vector2(0, y);
-        var archRadius = windowWidth / 2;
-        DrawArc(archCenter, archRadius, 0, Mathf.Pi, 64, frameColor, archRadius);
+        float archRadius = WindowWidth / 2;
+        DrawArc(archCenter, archRadius, 0, Mathf.Pi, 64, FrameColor, archRadius);
 
         // Border (lead came frame)
-        var borderColor = new Color(0.2f, 0.2f, 0.22f);
-        var borderWidth = 6f;
-        DrawRect(new Rect2(x, y, windowWidth, windowHeight), borderColor, false, borderWidth);
-        DrawArc(archCenter, archRadius, Mathf.Pi, Mathf.Tau, 64, borderColor, borderWidth);
-    }
-
-    public void RegisterPiece(GlassPiece piece)
-    {
-        _placedPieces.Add(piece);
+        DrawRect(new Rect2(x, y, WindowWidth, WindowHeight), BorderColor, false, BorderWidth);
+        DrawArc(archCenter, archRadius, Mathf.Pi, Mathf.Tau, 64, BorderColor, BorderWidth);
     }
 }
