@@ -1,0 +1,15 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://Scripts/GlassPiece.cs" id="1"]
+
+[node name="GlassPiece" type="Area2D"]
+script = ExtResource("1")
+input_pickable = true
+
+[node name="Glass" type="Polygon2D" parent="."]
+
+[node name="Came" type="Line2D" parent="."]
+width = 3.0
+default_color = Color(0.15, 0.15, 0.15, 1)
+
+[node name="Collision" type="CollisionPolygon2D" parent="."]
